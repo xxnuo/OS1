@@ -1,3 +1,7 @@
+import type { Capability } from './capabilities'
+import type { ClipboardSignal, FileSignal, InputSignal, UserSignalBatch, WindowSignal } from './signals'
+import type { MemoryItem } from './memory'
+
 export type EventType =
   | 'session'
   | 'audio_frame'
@@ -6,6 +10,13 @@ export type EventType =
   | 'llm_decision'
   | 'tts_chunk'
   | 'hud_state'
+  | 'capability'
+  | 'memory'
+  | 'window_changed'
+  | 'input_activity'
+  | 'file_changed'
+  | 'clipboard_changed'
+  | 'user_signal_batch'
   | 'audit'
 
 export type HudState = 'idle' | 'listening' | 'thinking' | 'speaking'
@@ -65,6 +76,63 @@ export type AuditEvent = {
   payload: Record<string, unknown>
 }
 
+export type CapabilityEvent = {
+  type: 'capability'
+  sessionId: string
+  time: string
+  payload: {
+    action: 'registered' | 'unregistered'
+    capability: Capability
+    total: number
+  }
+}
+
+export type MemoryEvent = {
+  type: 'memory'
+  sessionId: string
+  time: string
+  payload: {
+    action: 'created' | 'updated' | 'deleted' | 'locked'
+    item: MemoryItem
+    total: number
+  }
+}
+
+export type WindowChangedEvent = {
+  type: 'window_changed'
+  sessionId: string
+  time: string
+  payload: WindowSignal
+}
+
+export type InputActivityEvent = {
+  type: 'input_activity'
+  sessionId: string
+  time: string
+  payload: InputSignal
+}
+
+export type FileChangedEvent = {
+  type: 'file_changed'
+  sessionId: string
+  time: string
+  payload: FileSignal
+}
+
+export type ClipboardChangedEvent = {
+  type: 'clipboard_changed'
+  sessionId: string
+  time: string
+  payload: ClipboardSignal
+}
+
+export type UserSignalBatchEvent = {
+  type: 'user_signal_batch'
+  sessionId: string
+  time: string
+  payload: UserSignalBatch
+}
+
 export type Os1Event =
   | SessionEvent
   | AudioFrameEvent
@@ -73,4 +141,11 @@ export type Os1Event =
   | LlmDecisionEvent
   | TtsChunkEvent
   | HudStateEvent
+  | CapabilityEvent
+  | MemoryEvent
+  | WindowChangedEvent
+  | InputActivityEvent
+  | FileChangedEvent
+  | ClipboardChangedEvent
+  | UserSignalBatchEvent
   | AuditEvent

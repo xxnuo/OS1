@@ -68,7 +68,7 @@ func TestRuntimeFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer audit.Close()
-	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: 2 * time.Millisecond}, bus, audit, platform.NewStub())
+	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: 2 * time.Millisecond}, bus, audit, platform.NewStub(), nil)
 	if err := r.StartSession("s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestBargeInInterrupt(t *testing.T) {
 	bus := NewBus()
 	_, sub, unsub := bus.Subscribe(128)
 	defer unsub()
-	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: 200 * time.Millisecond}, bus, nil, platform.NewStub())
+	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: 200 * time.Millisecond}, bus, nil, platform.NewStub(), nil)
 	if err := r.StartSession("s2"); err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +138,16 @@ func TestBargeInInterrupt(t *testing.T) {
 
 func TestRuntimeSnapshot(t *testing.T) {
 	bus := NewBus()
-	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: time.Millisecond}, bus, nil, platform.NewStub())
+	r := NewRuntime(testASR{}, testLLM{}, testTTS{wait: time.Millisecond}, bus, nil, platform.NewStub(), nil)
 	state := r.Snapshot()
 	if state.Mute {
 		t.Fatal("mute should default false")
 	}
 	if !state.HUDVisible {
 		t.Fatal("hud should default true")
+	}
+	if state.OperationsPaused {
+		t.Fatal("operations should default running")
 	}
 	if err := r.SetMute(true); err != nil {
 		t.Fatal(err)
@@ -162,5 +165,19 @@ func TestRuntimeSnapshot(t *testing.T) {
 	}
 	if state.HUDVisible {
 		t.Fatal("hud should be false")
+	}
+	if !state.OperationsPaused {
+		t.Fatal("operations should be paused when hud hidden")
+	}
+	visible, err = r.ToggleHUD()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !visible {
+		t.Fatal("hud should be true after second toggle")
+	}
+	state = r.Snapshot()
+	if state.OperationsPaused {
+		t.Fatal("operations should resume when hud visible")
 	}
 }

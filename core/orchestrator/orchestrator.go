@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,30 +11,45 @@ import (
 )
 
 type Runtime struct {
-	mu             sync.Mutex
-	asr            ASRProvider
-	llm            LLMProvider
-	tts            TTSProvider
-	bus            *Bus
-	audit          *AuditWriter
-	platform       platform.Adapter
-	mute           bool
-	hudVisible     bool
-	speakingCancel map[string]context.CancelFunc
-	speakingGen    map[string]uint64
+	mu               sync.Mutex
+	asr              ASRProvider
+	llm              LLMProvider
+	tts              TTSProvider
+	bus              *Bus
+	audit            *AuditWriter
+	platform         platform.Adapter
+	capabilities     *CapabilityRegistry
+	memory           *MemoryStore
+	mute             bool
+	hudVisible       bool
+	operationsPaused bool
+	speakingCancel   map[string]context.CancelFunc
+	speakingGen      map[string]uint64
+	signalMu         sync.Mutex
+	signalBuffers    map[string]*signalBuffer
+	signalWindow     time.Duration
 }
 
-func NewRuntime(asr ASRProvider, llm LLMProvider, tts TTSProvider, bus *Bus, audit *AuditWriter, platformAdapter platform.Adapter) *Runtime {
+func NewRuntime(asr ASRProvider, llm LLMProvider, tts TTSProvider, bus *Bus, audit *AuditWriter, platformAdapter platform.Adapter, memoryStore *MemoryStore) *Runtime {
+	registry := NewCapabilityRegistry()
+	for _, spec := range BuiltinCapabilitySpecs() {
+		_, _ = registry.RegisterBuiltin(spec)
+	}
 	return &Runtime{
-		asr:            asr,
-		llm:            llm,
-		tts:            tts,
-		bus:            bus,
-		audit:          audit,
-		platform:       platformAdapter,
-		hudVisible:     true,
-		speakingCancel: map[string]context.CancelFunc{},
-		speakingGen:    map[string]uint64{},
+		asr:              asr,
+		llm:              llm,
+		tts:              tts,
+		bus:              bus,
+		audit:            audit,
+		platform:         platformAdapter,
+		capabilities:     registry,
+		memory:           memoryStore,
+		hudVisible:       true,
+		operationsPaused: false,
+		speakingCancel:   map[string]context.CancelFunc{},
+		speakingGen:      map[string]uint64{},
+		signalBuffers:    map[string]*signalBuffer{},
+		signalWindow:     300 * time.Millisecond,
 	}
 }
 
@@ -147,21 +163,182 @@ func (r *Runtime) ToggleHUD() (bool, error) {
 	r.mu.Lock()
 	r.hudVisible = !r.hudVisible
 	visible := r.hudVisible
+	r.operationsPaused = !visible
+	paused := r.operationsPaused
 	r.mu.Unlock()
 	if r.platform != nil {
 		if err := r.platform.SetHUDVisible(visible); err != nil {
 			return visible, err
 		}
 	}
-	r.emit(Event{Type: AuditEventType, Time: time.Now(), Payload: map[string]any{"hud_visible": visible}})
+	r.emit(Event{Type: AuditEventType, Time: time.Now(), Payload: map[string]any{
+		"hudVisible":       visible,
+		"operationsPaused": paused,
+	}})
 	return visible, nil
+}
+
+func (r *Runtime) RegisterCapability(sessionID string, spec CapabilitySpec) (Capability, error) {
+	capability, err := r.capabilities.Register(spec)
+	if err != nil {
+		return Capability{}, err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      CapabilityEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action":     "registered",
+			"capability": capability,
+			"total":      r.capabilities.Count(),
+		},
+	})
+	return capability, nil
+}
+
+func (r *Runtime) UnregisterCapability(sessionID string, capabilityID string) error {
+	capability, err := r.capabilities.Unregister(capabilityID)
+	if err != nil {
+		return err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      CapabilityEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action":     "unregistered",
+			"capability": capability,
+			"total":      r.capabilities.Count(),
+		},
+	})
+	return nil
+}
+
+func (r *Runtime) ListCapabilities() []Capability {
+	return r.capabilities.List()
+}
+
+func (r *Runtime) CreateMemory(sessionID string, input MemoryCreate) (MemoryItem, error) {
+	if r.memory == nil {
+		return MemoryItem{}, errors.New("memory store unavailable")
+	}
+	item, err := r.memory.Create(input)
+	if err != nil {
+		return MemoryItem{}, err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      MemoryEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action": "created",
+			"item":   item,
+			"total":  r.memory.Count(false),
+		},
+	})
+	return item, nil
+}
+
+func (r *Runtime) UpdateMemory(sessionID string, id string, patch MemoryPatch) (MemoryItem, error) {
+	if r.memory == nil {
+		return MemoryItem{}, errors.New("memory store unavailable")
+	}
+	item, err := r.memory.Update(id, patch)
+	if err != nil {
+		return MemoryItem{}, err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      MemoryEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action": "updated",
+			"item":   item,
+			"total":  r.memory.Count(false),
+		},
+	})
+	return item, nil
+}
+
+func (r *Runtime) DeleteMemory(sessionID string, id string) error {
+	if r.memory == nil {
+		return errors.New("memory store unavailable")
+	}
+	item, err := r.memory.Delete(id)
+	if err != nil {
+		return err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      MemoryEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action": "deleted",
+			"item":   item,
+			"total":  r.memory.Count(false),
+		},
+	})
+	return nil
+}
+
+func (r *Runtime) LockMemory(sessionID string, id string, locked bool) (MemoryItem, error) {
+	if r.memory == nil {
+		return MemoryItem{}, errors.New("memory store unavailable")
+	}
+	item, err := r.memory.Lock(id, locked)
+	if err != nil {
+		return MemoryItem{}, err
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		sid = "system"
+	}
+	r.emit(Event{
+		Type:      MemoryEventType,
+		SessionID: sid,
+		Time:      time.Now(),
+		Payload: map[string]any{
+			"action": "locked",
+			"item":   item,
+			"total":  r.memory.Count(false),
+		},
+	})
+	return item, nil
+}
+
+func (r *Runtime) ListMemory(includeDeleted bool) []MemoryItem {
+	if r.memory == nil {
+		return nil
+	}
+	return r.memory.List(includeDeleted)
 }
 
 func (r *Runtime) Snapshot() State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return State{
-		Mute:       r.mute,
-		HUDVisible: r.hudVisible,
+		Mute:             r.mute,
+		HUDVisible:       r.hudVisible,
+		OperationsPaused: r.operationsPaused,
 	}
 }
