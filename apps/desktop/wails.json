@@ -1,0 +1,7 @@
+{
+  "name": "OS1",
+  "outputfilename": "os1",
+  "frontend:install": "pnpm install --filter @os1/ui...",
+  "frontend:build": "pnpm --filter @os1/ui build",
+  "frontend:dev:watcher": "pnpm --filter @os1/ui dev"
+}

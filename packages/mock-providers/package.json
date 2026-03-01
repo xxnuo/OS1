@@ -1,0 +1,16 @@
+{
+  "name": "@os1/mock-providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@os1/protocol": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "echo ok",
+    "lint": "echo ok"
+  }
+}

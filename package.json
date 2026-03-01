@@ -1,0 +1,13 @@
+{
+  "name": "os1",
+  "private": true,
+  "packageManager": "pnpm@9.12.2",
+  "scripts": {
+    "dev": "bash scripts/dev-all.sh",
+    "dev:backend": "bash scripts/dev.sh",
+    "dev:ui": "pnpm --filter @os1/ui dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  }
+}
